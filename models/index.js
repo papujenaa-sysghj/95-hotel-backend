@@ -74,6 +74,13 @@ const bookingSchema = new Schema({
   guest: ref('Guest', { required: true }), room: ref('Room', { required: true }), roomType: ref('RoomType'),
   checkInDate: { type: Date, required: true }, checkOutDate: { type: Date, required: true },
   adults: { type: Number, default: 1 }, children: { type: Number, default: 0 },
+  coGuests: [{
+    name: { type: String, trim: true },
+    phone: String,
+    idType: { type: String, default: 'Aadhaar' },
+    idNumber: String,
+    idDocumentUrl: String,
+  }],
   nights: Number, roomRate: Number, extraBedCharge: { type: Number, default: 0 }, otherCharges: { type: Number, default: 0 },
   subtotal: Number, discount: { type: Number, default: 0 }, taxPercent: { type: Number, default: 0 }, tax: Number,
   totalAmount: Number, paidAmount: { type: Number, default: 0 }, balanceAmount: Number,

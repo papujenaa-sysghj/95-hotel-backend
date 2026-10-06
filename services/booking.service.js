@@ -49,6 +49,7 @@ export const createBooking = async (input, user) => {
 
   const b = new Booking({
     bookingNumber, guest: guest._id, room: room._id, roomType: room.roomType, checkInDate: checkIn, checkOutDate: checkOut, adults: input.adults, children: input.children || 0,
+    coGuests: input.coGuests || [],
     nights, roomRate, extraBedCharge: input.extraBedCharge || 0, otherCharges: input.otherCharges || 0, discount: input.discount || 0,
     taxPercent: input.taxPercent ?? hotel?.booking?.taxPercent ?? 0, bookedAsAC: cfg.sellableIsAC, bookingStatus: input.hold ? 'hold' : 'confirmed',
     source: input.source || 'reception', notes: input.notes, createdBy: user._id, updatedBy: user._id, paidAmount: 0,
@@ -67,7 +68,7 @@ export const createBooking = async (input, user) => {
 export const updateBooking = async (id, patch, user) => {
   const b = await getBooking(id);
   if (['cancelled', 'checked_out'].includes(b.bookingStatus)) throw new ApiError(409, `A ${b.bookingStatus.replace('_', '-')} booking cannot be edited.`);
-  for (const k of ['adults', 'children', 'extraBedCharge', 'otherCharges', 'discount', 'notes', 'source']) if (patch[k] !== undefined) b[k] = patch[k];
+  for (const k of ['adults', 'children', 'coGuests', 'extraBedCharge', 'otherCharges', 'discount', 'notes', 'source']) if (patch[k] !== undefined) b[k] = patch[k];
   if (patch.roomRate !== undefined && patch.roomRate !== b.roomRate) { if (!patch.canEditRate) throw new ApiError(403, "You don't have permission to edit rates."); b.roomRate = patch.roomRate; }
   if (patch.discount !== undefined && patch.discount > 0 && patch.discount !== b.discount && !patch.canGiveDiscount) throw new ApiError(403, "You don't have permission to give or edit discounts. Ask an Admin to enable this permission.");
   if (patch.guest) await Guest.findByIdAndUpdate(b.guest, patch.guest);
