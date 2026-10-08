@@ -24,7 +24,7 @@ export const bookingCreateSchema = z.object({
 });
 export const bookingUpdateSchema = z.object({
   adults: z.coerce.number().int().min(1).optional(), children: z.coerce.number().int().min(0).optional(), extraBedCharge: num.min(0).optional(),
-  otherCharges: num.min(0).optional(), discount: num.min(0).optional(), roomRate: num.min(0).optional(), notes: z.string().max(1000).optional(),
+  otherCharges: num.min(0).optional(), discount: num.min(0).optional(), roomRate: num.min(0).optional(), taxPercent: num.min(0).max(100).optional(), notes: z.string().max(1000).optional(),
   source: z.enum(['reception', 'walk_in', 'phone', 'other']).optional(), guest: guestSchema.partial().optional(),
 });
 export const modifyStaySchema = z.object({ room: oid.optional(), checkInDate: date.optional(), checkOutDate: date.optional(), reason: z.string().optional(), newRate: num.min(0).optional() });
