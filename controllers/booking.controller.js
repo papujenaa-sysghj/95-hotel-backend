@@ -55,7 +55,14 @@ export const noShow = asyncHandler(async (req, res) => { const b = await svc.mar
 
 export const arrivals = asyncHandler(async (_req, res) => { const t = toDay(new Date()); ok(res, { items: await Booking.find({ checkInDate: t, bookingStatus: { $in: ['confirmed', 'hold', 'checked_in'] } }).populate(pop) }); });
 export const departures = asyncHandler(async (_req, res) => { const t = toDay(new Date()); ok(res, { items: await Booking.find({ checkOutDate: { $lte: t }, bookingStatus: { $in: ['checked_in', 'checked_out'] }, $or: [{ bookingStatus: 'checked_in' }, { actualCheckOut: { $gte: t } }] }).populate(pop) }); });
-export const doCheckIn = asyncHandler(async (req, res) => { const b = await svc.checkIn_(req.params.id, req.user); await audit(req, 'booking.check_in', { entity: 'Booking', entityId: b._id, summary: `Checked in ${b.bookingNumber} (Room ${b.room?.roomNumber})` }); ok(res, { booking: b }, 'Guest checked in'); });
+export const doCheckIn = asyncHandler(async (req, res) => {
+  if (req.body?.payment?.amount > 0 && !hasPermission(req, 'payments.create')) {
+    throw new ApiError(403, "You don't have permission to take payments.");
+  }
+  const b = await svc.checkIn_(req.params.id, req.user, { payment: req.body?.payment });
+  await audit(req, 'booking.check_in', { entity: 'Booking', entityId: b._id, summary: `Checked in ${b.bookingNumber} (Room ${b.room?.roomNumber})` });
+  ok(res, { booking: b }, 'Guest checked in');
+});
 export const doCheckOut = asyncHandler(async (req, res) => {
   if (req.body?.payment && !hasPermission(req, 'payments.create')) throw new ApiError(403, "You don't have permission to take payments.");
   const b = await svc.checkOut(req.params.id, req.user, { ...req.body, canGiveDiscount: hasPermission(req, 'bookings.give_discount') });

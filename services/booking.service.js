@@ -142,14 +142,18 @@ export const markNoShow = async (id, user) => {
 };
 
 // exported as checkIn_ to avoid clashing with the local `checkIn` date variable above
-export const checkIn_ = async (id, user, { requireDeposit = false } = {}) => {
-  const b = await getBooking(id);
+export const checkIn_ = async (id, user, { requireDeposit = false, payment } = {}) => {
+  let b = await getBooking(id);
   if (!['confirmed', 'hold'].includes(b.bookingStatus)) throw new ApiError(409, `Cannot check in a ${b.bookingStatus.replace('_', '-')} booking.`);
   if (toDay(b.checkInDate) > toDay(new Date())) throw new ApiError(409, `Arrival is on ${fmt(b.checkInDate)}. Early check-in requires changing the booking dates first.`);
   const room = await Room.findById(b.room);
   if (room.maintenanceStatus !== 'normal') throw new ApiError(409, `Room ${room.roomNumber} is not available (${room.maintenanceStatus.replace('_', ' ')}).`);
   if (room.occupancyStatus === 'occupied') throw new ApiError(409, `Room ${room.roomNumber} is still occupied by the previous guest.`);
   if (!['clean', 'inspected'].includes(room.housekeepingStatus)) throw new ApiError(409, `Room ${room.roomNumber} is ${room.housekeepingStatus} and not ready for check-in.`);
+  if (payment?.amount > 0) {
+    await addPayment(id, payment, user);
+    b = await getBooking(id);
+  }
   if (requireDeposit && b.paidAmount <= 0) throw new ApiError(409, 'An advance payment is required before check-in.');
   b.bookingStatus = 'checked_in'; b.actualCheckIn = new Date(); b.updatedBy = user._id; await b.save();
   room.occupancyStatus = 'occupied'; await room.save();
