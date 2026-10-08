@@ -21,7 +21,7 @@ export const DEFAULT_ROLES = [
   { name: 'Admin', description: 'Super admin / owner — full access', permissions: ['*'] },
   { name: 'Manager', description: 'Operations manager', permissions: ALL_KEYS.filter((k) => !['users.delete', 'roles.manage', 'settings.manage'].includes(k)) },
   { name: 'Receptionist', description: 'Front desk', permissions: [
-    'dashboard.view', 'bookings.view', 'bookings.create', 'bookings.edit', 'bookings.give_discount', 'calendar.view', 'calendar.edit', 'checkin.perform', 'checkout.perform',
+    'dashboard.view', 'bookings.view', 'bookings.create', 'bookings.edit', 'bookings.cancel', 'bookings.give_discount', 'calendar.view', 'calendar.edit', 'checkin.perform', 'checkout.perform',
     'rooms.view', 'guests.view', 'guests.create', 'guests.edit', 'payments.view', 'payments.create', 'invoices.view', 'invoices.create',
     'housekeeping.view', 'maintenance.view', 'maintenance.create'] },
   { name: 'Cashier', description: 'Payments & invoices', permissions: ['dashboard.view', 'bookings.view', 'guests.view', 'payments.view', 'payments.create', 'payments.refund', 'invoices.view', 'invoices.create', 'reports.view', 'checkout.perform'] },

@@ -44,7 +44,7 @@ test('temporary Non-AC override does not touch the permanent config', () => {
 test('RBAC: receptionist lacks admin-only permissions; admin has all', () => {
   const perms = (name) => ({ permissions: new Set(DEFAULT_ROLES.find((r) => r.name === name).permissions) });
   const rec = perms('Receptionist'), admin = perms('Admin');
-  for (const k of ['bookings.cancel', 'bookings.edit_rate', 'payments.refund', 'rooms.configure', 'users.create', 'settings.manage', 'roles.manage']) assert.equal(hasPermission(rec, k), false, k);
-  for (const k of ['bookings.create', 'checkin.perform', 'calendar.edit']) assert.equal(hasPermission(rec, k), true, k);
+  for (const k of ['bookings.edit_rate', 'payments.refund', 'rooms.configure', 'users.create', 'settings.manage', 'roles.manage']) assert.equal(hasPermission(rec, k), false, k);
+  for (const k of ['bookings.create', 'bookings.cancel', 'checkin.perform', 'calendar.edit']) assert.equal(hasPermission(rec, k), true, k);
   assert.equal(hasPermission(admin, 'anything.at.all'), true);
 });
