@@ -15,13 +15,13 @@ export const guestSchema = z.object({
 });
 
 export const bookingCreateSchema = z.object({
-  guest: guestSchema, room: oid, checkInDate: date, checkOutDate: date,
+  guest: guestSchema, room: oid.optional(), rooms: z.array(oid).optional(), checkInDate: date, checkOutDate: date,
   adults: z.coerce.number().int().min(1, 'At least one adult is required'), children: z.coerce.number().int().min(0).default(0),
   roomRate: num.min(0).optional(), extraBedCharge: num.min(0).default(0), otherCharges: num.min(0).default(0), discount: num.min(0).default(0),
   taxPercent: num.min(0).max(100).optional(), source: z.enum(['reception', 'walk_in', 'phone', 'other']).default('reception'),
   hold: z.boolean().optional(), notes: z.string().max(1000).optional(), checkInNow: z.boolean().optional(),
   payment: z.object({ amount: num.positive(), method: z.enum(['cash', 'upi', 'card', 'bank_transfer', 'other']), notes: z.string().optional() }).optional(),
-});
+}).refine((d) => d.room || (d.rooms && d.rooms.length > 0), { message: 'At least one room is required.', path: ['room'] });
 export const bookingUpdateSchema = z.object({
   adults: z.coerce.number().int().min(1).optional(), children: z.coerce.number().int().min(0).optional(), extraBedCharge: num.min(0).optional(),
   otherCharges: num.min(0).optional(), discount: num.min(0).optional(), roomRate: num.min(0).optional(), taxPercent: num.min(0).max(100).optional(), notes: z.string().max(1000).optional(),

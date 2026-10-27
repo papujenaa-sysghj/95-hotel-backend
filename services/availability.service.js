@@ -49,21 +49,85 @@ export const reserveNights = async (roomId, bookingId, from, to) => {
 };
 export const releaseNights = (bookingId, filter = {}) => RoomNight.deleteMany({ booking: bookingId, ...filter });
 
-/** Rooms sellable for [from,to) — used by booking wizard & walk-in. */
-export const findAvailableRooms = async (from, to, { roomType, floor, isAC, adults = 0, children = 0 } = {}) => {
+/** Comprehensive room availability check for [from,to) — returns both sellable rooms and all rooms with availability status. */
+export const getRoomsAvailability = async (from, to, { roomType, floor, isAC, adults = 0, children = 0 } = {}) => {
   const { checkIn, checkOut } = validateRange(from, to);
-  const busy = await Booking.distinct('room', { bookingStatus: { $in: BLOCKING_STATUSES }, ...overlapQuery(checkIn, checkOut) });
-  const blocked = await Maintenance.distinct('room', { blocksRoom: true, status: { $in: ['open', 'in_progress'] }, blockFrom: { $lt: checkOut }, blockTo: { $gt: checkIn } });
-  const filter = { isActive: true, maintenanceStatus: { $ne: 'out_of_service' }, _id: { $nin: [...busy, ...blocked] } };
+  const busy = await Booking.find({ bookingStatus: { $in: BLOCKING_STATUSES }, ...overlapQuery(checkIn, checkOut) }).select('room bookingNumber checkInDate checkOutDate');
+  const blocked = await Maintenance.find({ blocksRoom: true, status: { $in: ['open', 'in_progress'] }, blockFrom: { $lt: checkOut }, blockTo: { $gt: checkIn } }).select('room issue blockFrom blockTo');
+  
+  const busyMap = new Map();
+  busy.forEach((b) => {
+    if (b.room) busyMap.set(String(b.room), b);
+  });
+  
+  const blockedMap = new Map();
+  blocked.forEach((m) => {
+    if (m.room) blockedMap.set(String(m.room), m);
+  });
+
+  const filter = { isActive: true };
   if (roomType) filter.roomType = roomType;
   if (floor !== undefined && floor !== '') filter.floor = Number(floor);
-  if (adults) filter.adultsCapacity = { $gte: Number(adults) };
-  if (children) filter.childrenCapacity = { $gte: Number(children) };
-  let rooms = await Room.find(filter).populate('roomType amenities').sort({ floor: 1, roomNumber: 1 });
-  // A room in 'maintenance' right now is not sellable for stays starting today or earlier
+  
+  let allRooms = await Room.find(filter).populate('roomType amenities').sort({ floor: 1, roomNumber: 1 });
   const today = toDay(new Date());
-  rooms = rooms.filter((r) => !(r.maintenanceStatus === 'maintenance' && checkIn <= today));
-  return rooms.map((r) => ({ ...r.toObject(), ...sellableConfig(r) })).filter((r) => isAC === undefined || isAC === '' || r.sellableIsAC === (isAC === 'true' || isAC === true));
+
+  const processed = allRooms.map((r) => {
+    const rid = String(r._id);
+    let isAvailable = true;
+    let reason = null; // 'occupied' | 'maintenance' | 'out_of_service' | 'capacity'
+    let detail = null;
+
+    if (r.maintenanceStatus === 'out_of_service') {
+      isAvailable = false;
+      reason = 'out_of_service';
+      detail = 'Out of service';
+    } else if (blockedMap.has(rid) || (r.maintenanceStatus === 'maintenance' && checkIn <= today)) {
+      isAvailable = false;
+      reason = 'maintenance';
+      const m = blockedMap.get(rid);
+      detail = m?.issue ? `Maintenance (${m.issue.replace(/_/g, ' ')})` : 'Under maintenance';
+    } else if (busyMap.has(rid)) {
+      isAvailable = false;
+      reason = 'occupied';
+      const b = busyMap.get(rid);
+      detail = b?.bookingNumber ? `Occupied (${b.bookingNumber})` : 'Occupied';
+    } else if (adults && r.adultsCapacity < Number(adults)) {
+      isAvailable = false;
+      reason = 'capacity';
+      detail = `Capacity: max ${r.adultsCapacity} adults`;
+    } else if (children && r.childrenCapacity < Number(children)) {
+      isAvailable = false;
+      reason = 'capacity';
+      detail = `Capacity: max ${r.childrenCapacity} children`;
+    }
+
+    const cfg = sellableConfig(r);
+    return {
+      ...r.toObject(),
+      ...cfg,
+      isAvailable,
+      unavailabilityReason: reason,
+      unavailabilityDetail: detail,
+      conflictingBooking: busyMap.get(rid)?.bookingNumber || null,
+    };
+  }).filter((r) => isAC === undefined || isAC === '' || r.sellableIsAC === (isAC === 'true' || isAC === true));
+
+  const availableRooms = processed.filter((r) => r.isAvailable);
+
+  return {
+    rooms: availableRooms,
+    allRooms: processed,
+    availableCount: availableRooms.length,
+    unavailableCount: processed.length - availableRooms.length,
+    totalCount: processed.length,
+  };
+};
+
+/** Rooms sellable for [from,to) — used by booking wizard & walk-in. */
+export const findAvailableRooms = async (from, to, options = {}) => {
+  const res = await getRoomsAvailability(from, to, options);
+  return res.rooms;
 };
 
 /** Effective (temporary-aware) config used for new bookings. Permanent fields are never mutated. */

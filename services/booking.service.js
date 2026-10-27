@@ -35,34 +35,114 @@ export const upsertGuest = async (g) => {
 
 export const createBooking = async (input, user) => {
   const { checkIn, checkOut, nights } = validateRange(input.checkInDate, input.checkOutDate);
-  const room = await assertRoomAvailable(input.room, checkIn, checkOut);
-  if (input.adults > room.adultsCapacity + 2 || (input.adults + (input.children || 0)) > room.adultsCapacity + room.childrenCapacity + 1)
-    throw new ApiError(400, `Room ${room.roomNumber} cannot host that many guests.`);
+  const roomIds = input.rooms && Array.isArray(input.rooms) && input.rooms.length > 0 ? input.rooms : [input.room];
+  const rooms = await Promise.all(roomIds.map((rid) => assertRoomAvailable(rid, checkIn, checkOut)));
   const hotel = await Hotel.findOne();
-  const cfg = sellableConfig(room);
   const guest = await upsertGuest(input.guest);
   const year = new Date().getUTCFullYear();
-  const bookingNumber = `BK-${year}-${String(await nextSeq(`booking-${year}`)).padStart(6, '0')}`;
-  const roomRate = input.roomRate ?? cfg.sellablePrice;
-  if (input.roomRate !== undefined && input.roomRate !== cfg.sellablePrice && !input.canEditRate) throw new ApiError(403, "You don't have permission to override the room rate.");
+
+  // If single room booking:
+  if (rooms.length === 1) {
+    const room = rooms[0];
+    if (input.adults > room.adultsCapacity + 2 || (input.adults + (input.children || 0)) > room.adultsCapacity + room.childrenCapacity + 1)
+      throw new ApiError(400, `Room ${room.roomNumber} cannot host that many guests.`);
+    const cfg = sellableConfig(room);
+    const bookingNumber = `BK-${year}-${String(await nextSeq(`booking-${year}`)).padStart(6, '0')}`;
+    const roomRate = input.roomRate ?? cfg.sellablePrice;
+    if (input.roomRate !== undefined && input.roomRate !== cfg.sellablePrice && !input.canEditRate) throw new ApiError(403, "You don't have permission to override the room rate.");
+    if (input.discount > 0 && !input.canGiveDiscount) throw new ApiError(403, "You don't have permission to give discounts. Ask an Admin to enable this permission.");
+
+    const b = new Booking({
+      bookingNumber, guest: guest._id, room: room._id, roomType: room.roomType, checkInDate: checkIn, checkOutDate: checkOut, adults: input.adults, children: input.children || 0,
+      coGuests: input.coGuests || [],
+      nights, roomRate, extraBedCharge: input.extraBedCharge || 0, otherCharges: input.otherCharges || 0, discount: input.discount || 0,
+      taxPercent: input.taxPercent ?? hotel?.booking?.taxPercent ?? 0, bookedAsAC: cfg.sellableIsAC, bookingStatus: input.hold ? 'hold' : 'confirmed',
+      source: input.source || 'reception', notes: input.notes, createdBy: user._id, updatedBy: user._id, paidAmount: 0,
+      roomHistory: [{ room: room._id, from: checkIn, changedBy: user._id, reason: 'Initial booking' }],
+    });
+    recalc(b);
+    if (b.discount > b.subtotal) throw new ApiError(400, 'Discount cannot exceed the subtotal.');
+    await b.save();
+    try { await reserveNights(room._id, b._id, checkIn, checkOut); } catch (e) { await Booking.deleteOne({ _id: b._id }); throw e; }
+
+    if (input.payment?.amount > 0) await addPayment(b._id, input.payment, user);
+    if (input.checkInNow) await checkIn_(b._id, user);
+    return Booking.findById(b._id).populate(populate);
+  }
+
+  // Multi-room booking (2 or more rooms booked at a time):
+  const totalStandardPrice = rooms.reduce((sum, r) => sum + sellableConfig(r).sellablePrice, 0);
+  const totalProvidedRate = input.roomRate !== undefined ? input.roomRate : totalStandardPrice;
+  if (input.roomRate !== undefined && input.roomRate !== totalStandardPrice && !input.canEditRate) throw new ApiError(403, "You don't have permission to override the room rate.");
   if (input.discount > 0 && !input.canGiveDiscount) throw new ApiError(403, "You don't have permission to give discounts. Ask an Admin to enable this permission.");
 
-  const b = new Booking({
-    bookingNumber, guest: guest._id, room: room._id, roomType: room.roomType, checkInDate: checkIn, checkOutDate: checkOut, adults: input.adults, children: input.children || 0,
-    coGuests: input.coGuests || [],
-    nights, roomRate, extraBedCharge: input.extraBedCharge || 0, otherCharges: input.otherCharges || 0, discount: input.discount || 0,
-    taxPercent: input.taxPercent ?? hotel?.booking?.taxPercent ?? 0, bookedAsAC: cfg.sellableIsAC, bookingStatus: input.hold ? 'hold' : 'confirmed',
-    source: input.source || 'reception', notes: input.notes, createdBy: user._id, updatedBy: user._id, paidAmount: 0,
-    roomHistory: [{ room: room._id, from: checkIn, changedBy: user._id, reason: 'Initial booking' }],
-  });
-  recalc(b);
-  if (b.discount > b.subtotal) throw new ApiError(400, 'Discount cannot exceed the subtotal.');
-  await b.save();
-  try { await reserveNights(room._id, b._id, checkIn, checkOut); } catch (e) { await Booking.deleteOne({ _id: b._id }); throw e; }
+  const roomNames = rooms.map((r) => r.roomNumber).join(', ');
+  const createdBookings = [];
 
-  if (input.payment?.amount > 0) await addPayment(b._id, input.payment, user);
-  if (input.checkInNow) await checkIn_(b._id, user);
-  return Booking.findById(b._id).populate(populate);
+  for (let i = 0; i < rooms.length; i++) {
+    const r = rooms[i];
+    const cfg = sellableConfig(r);
+    const bookingNumber = `BK-${year}-${String(await nextSeq(`booking-${year}`)).padStart(6, '0')}`;
+    const rateRatio = totalStandardPrice > 0 ? (cfg.sellablePrice / totalStandardPrice) : (1 / rooms.length);
+    const individualRate = input.roomRate !== undefined ? Math.round(totalProvidedRate * rateRatio) : cfg.sellablePrice;
+    const individualDiscount = i === 0 ? (input.discount || 0) : 0;
+    const individualExtra = i === 0 ? (input.extraBedCharge || 0) : 0;
+    const individualOther = i === 0 ? (input.otherCharges || 0) : 0;
+    const groupNote = `Multi-Room Booking (${rooms.length} Rooms: ${roomNames})${input.notes ? ` • ${input.notes}` : ''}`;
+
+    const b = new Booking({
+      bookingNumber,
+      guest: guest._id,
+      room: r._id,
+      roomType: r.roomType,
+      checkInDate: checkIn,
+      checkOutDate: checkOut,
+      adults: Math.max(1, Math.floor(input.adults / rooms.length) + (i === 0 ? (input.adults % rooms.length) : 0)),
+      children: i === 0 ? (input.children || 0) : 0,
+      coGuests: i === 0 ? (input.coGuests || []) : [],
+      nights,
+      roomRate: individualRate,
+      extraBedCharge: individualExtra,
+      otherCharges: individualOther,
+      discount: individualDiscount,
+      taxPercent: input.taxPercent ?? hotel?.booking?.taxPercent ?? 0,
+      bookedAsAC: cfg.sellableIsAC,
+      bookingStatus: input.hold ? 'hold' : 'confirmed',
+      source: input.source || 'reception',
+      notes: groupNote,
+      createdBy: user._id,
+      updatedBy: user._id,
+      paidAmount: 0,
+      roomHistory: [{ room: r._id, from: checkIn, changedBy: user._id, reason: 'Initial multi-room booking' }],
+    });
+    recalc(b);
+    await b.save();
+
+    try {
+      await reserveNights(r._id, b._id, checkIn, checkOut);
+    } catch (e) {
+      for (const cb of createdBookings) {
+        await Booking.deleteOne({ _id: cb._id });
+        await releaseNights(cb._id);
+      }
+      await Booking.deleteOne({ _id: b._id });
+      throw e;
+    }
+
+    createdBookings.push(b);
+  }
+
+  const primaryBooking = createdBookings[0];
+  if (input.payment?.amount > 0) {
+    await addPayment(primaryBooking._id, input.payment, user);
+  }
+  if (input.checkInNow) {
+    for (const cb of createdBookings) {
+      await checkIn_(cb._id, user);
+    }
+  }
+
+  return Booking.findById(primaryBooking._id).populate(populate);
 };
 
 export const updateBooking = async (id, patch, user) => {

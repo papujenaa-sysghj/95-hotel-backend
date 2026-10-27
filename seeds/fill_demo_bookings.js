@@ -4,6 +4,11 @@ import { connectDB } from '../config/db.js';
 import * as M from '../models/index.js';
 import { createBooking, checkIn_, checkOut } from '../services/booking.service.js';
 
+if (process.env.NODE_ENV === 'production') {
+  console.error('CRITICAL SAFETY: Cannot run demo booking fill in production environment.');
+  process.exit(1);
+}
+
 await connectDB();
 
 const user = await M.User.findOne({ username: 'admin' }) || await M.User.findOne();

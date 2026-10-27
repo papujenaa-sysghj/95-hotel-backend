@@ -7,7 +7,7 @@ export const env = {
   jwtSecret: process.env.JWT_SECRET,
   jwtRefreshSecret: process.env.JWT_REFRESH_SECRET,
   clientUrl: process.env.CLIENT_URL || 'http://localhost:5173',
-  hotelName: process.env.HOTEL_NAME || 'Hotel',
+  hotelName: process.env.HOTEL_NAME || 'GS Hotels',
   smtp: { host: process.env.SMTP_HOST, port: process.env.SMTP_PORT, user: process.env.SMTP_USER, pass: process.env.SMTP_PASSWORD },
 };
 export const assertEnv = () => {

@@ -1,7 +1,8 @@
 import PDFDocument from 'pdfkit';
+import { generateInvoicePdf } from '../services/invoice.service.js';
 import { Booking, Room, Guest, Payment, Maintenance, Invoice, Hotel, nextSeq } from '../models/index.js';
 import * as svc from '../services/booking.service.js';
-import { findAvailableRooms, BLOCKING_STATUSES } from '../services/availability.service.js';
+import { findAvailableRooms, getRoomsAvailability, BLOCKING_STATUSES } from '../services/availability.service.js';
 import { hasPermission } from '../middleware/permission.middleware.js';
 import { audit } from '../services/audit.service.js';
 import { notify } from '../services/notification.service.js';
@@ -12,7 +13,10 @@ import { ApiError, ok, asyncHandler } from '../utils/ApiError.js';
 const pop = svc.bookingPopulate;
 const esc = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-export const availability = asyncHandler(async (req, res) => ok(res, { rooms: await findAvailableRooms(req.query.checkInDate, req.query.checkOutDate, req.query) }));
+export const availability = asyncHandler(async (req, res) => {
+  const result = await getRoomsAvailability(req.query.checkInDate, req.query.checkOutDate, req.query);
+  ok(res, result);
+});
 
 export const list = asyncHandler(async (req, res) => {
   const { status, paymentStatus, from, to, guest, room, q, page = 1, limit = 25 } = req.query; const f = {};
@@ -113,7 +117,8 @@ const buildInvoice = async (bookingId, user) => {
   const b = await Booking.findById(bookingId).populate('guest room roomType'); if (!b) throw new ApiError(404, 'Booking not found.');
   let inv = await Invoice.findOne({ booking: b._id });
   const hotel = (await Hotel.findOne()) || {};
-  const lines = [{ description: `Room ${b.room.roomNumber} (${b.roomType?.name}, ${b.bookedAsAC ? 'AC' : 'Non-AC'}) × ${b.nights} night(s) @ ₹${b.roomRate}`, amount: b.roomRate * b.nights }];
+  const roomNum = b.room?.roomNumber ? `Room ${b.room.roomNumber}` : 'Room Reservation';
+  const lines = [{ description: `${roomNum} (${b.roomType?.name || 'Standard'}, ${b.bookedAsAC ? 'AC' : 'Non-AC'}) × ${b.nights} night(s) @ ₹${b.roomRate}`, amount: b.roomRate * b.nights }];
   if (b.extraBedCharge) lines.push({ description: 'Extra bed', amount: b.extraBedCharge }); if (b.otherCharges) lines.push({ description: 'Other charges', amount: b.otherCharges });
   if (b.discount) lines.push({ description: 'Discount', amount: -b.discount }); lines.push({ description: `Tax (${b.taxPercent}%)`, amount: b.tax });
   if (!inv) inv = await Invoice.create({ invoiceNumber: `${hotel.invoice?.prefix || 'INV'}-${new Date().getUTCFullYear()}-${String(await nextSeq('invoice')).padStart(5, '0')}`, booking: b._id, generatedBy: user._id });
@@ -124,11 +129,8 @@ export const invoiceJson = asyncHandler(async (req, res) => { const { inv, b, ho
 export const invoicePdf = asyncHandler(async (req, res) => {
   const { inv, b, hotel, lines } = await buildInvoice(req.params.bookingId, req.user);
   await audit(req, 'invoice.generate', { entity: 'Invoice', entityId: inv._id, summary: `Invoice ${inv.invoiceNumber} for ${b.bookingNumber}` });
-  res.setHeader('Content-Type', 'application/pdf'); res.setHeader('Content-Disposition', `inline; filename="${inv.invoiceNumber}.pdf"`);
-  const doc = new PDFDocument({ margin: 50 }); doc.pipe(res);
-  doc.fontSize(20).text(hotel.name || 'Hotel', { align: 'left' }).fontSize(9).fillColor('#555').text([hotel.address, hotel.phone, hotel.email, hotel.gstNumber && `GSTIN: ${hotel.gstNumber}`].filter(Boolean).join('  |  ')).fillColor('#000').moveDown();
-  doc.fontSize(14).text(`TAX INVOICE  ${inv.invoiceNumber}`).fontSize(10).text(`Booking: ${b.bookingNumber}`).text(`Guest: ${b.guest.name}  |  ${b.guest.phone}`).text(`Room: ${b.room.roomNumber}   Check-in: ${fmt(b.checkInDate)}   Check-out: ${fmt(b.checkOutDate)}   Nights: ${b.nights}`).moveDown();
-  lines.forEach((l) => doc.text(l.description, 50, doc.y, { continued: true, width: 380 }).text(`₹${l.amount.toLocaleString('en-IN')}`, { align: 'right' }));
-  doc.moveDown().fontSize(12).text(`Total: ₹${b.totalAmount.toLocaleString('en-IN')}`, { align: 'right' }).text(`Paid: ₹${b.paidAmount.toLocaleString('en-IN')}`, { align: 'right' }).text(`Balance: ₹${b.balanceAmount.toLocaleString('en-IN')}`, { align: 'right' });
-  if (hotel.invoice?.footerNote) doc.moveDown().fontSize(9).fillColor('#555').text(hotel.invoice.footerNote); doc.end();
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', `inline; filename="${inv.invoiceNumber}.pdf"`);
+  const payments = await Payment.find({ booking: b._id }).sort({ paidAt: 1 });
+  generateInvoicePdf({ inv, b, hotel, lines, payments, outStream: res });
 });
