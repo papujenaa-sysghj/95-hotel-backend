@@ -10,8 +10,8 @@ node_modules
 
 # Environment secrets
 .env
-.env.local
-.env.production
+.env.*
+.env.example
 
 # Uploaded guest documents & attachments
 uploads/*
